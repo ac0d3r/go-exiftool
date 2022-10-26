@@ -12,14 +12,19 @@ import (
 	"time"
 )
 
+var readyToken = []byte("{ready}")
+var readyTokenLen = len(readyToken)
+
 // Exiftool is the exiftool utility wrapper
 type Exiftool struct {
 	mux sync.Mutex
 
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	stdMergedOut  io.ReadCloser
-	scanMergedOut *bufio.Scanner
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	mulStdout io.ReadCloser
+
+	resReader bufio.Reader
+	cache     *bytes.Buffer
 }
 
 // NewExiftool instanciates a new Exiftool with configuration functions. If anything went
@@ -29,8 +34,9 @@ func NewExiftool() (*Exiftool, error) {
 	e.cmd = exec.Command(exiftoolBinary, "-stay_open", "True", "-@", "-")
 
 	r, w := io.Pipe()
-	e.stdMergedOut = r
+	e.mulStdout = r
 
+	// merge stdout & stderr
 	e.cmd.Stdout = w
 	e.cmd.Stderr = w
 
@@ -39,8 +45,8 @@ func NewExiftool() (*Exiftool, error) {
 		return nil, err
 	}
 
-	e.scanMergedOut = bufio.NewScanner(e.stdMergedOut)
-	e.scanMergedOut.Split(splitReadyToken)
+	e.resReader = *bufio.NewReader(e.mulStdout)
+	e.cache = bytes.NewBuffer(make([]byte, 0, 1024))
 
 	if err = e.cmd.Start(); err != nil {
 		return nil, fmt.Errorf("error when executing command: %w", err)
@@ -60,7 +66,8 @@ func (e *Exiftool) Close() error {
 	}
 
 	var err error
-	if err = e.stdMergedOut.Close(); err != nil {
+	e.cache.Reset()
+	if err = e.mulStdout.Close(); err != nil {
 		return err
 	}
 	if err = e.stdin.Close(); err != nil {
@@ -97,32 +104,31 @@ func (e *Exiftool) Scan(path string) (string, error) {
 		}
 	}
 
-	ok := e.scanMergedOut.Scan()
-	serr := e.scanMergedOut.Err()
-	if serr != nil {
-		return "", serr
+	e.cache.Reset()
+	var (
+		line []byte
+		err  error
+	)
+	for {
+		line, _, err = e.resReader.ReadLine()
+		if err == io.EOF {
+			break
+		}
+		if len(line) < readyTokenLen {
+			goto Cache
+		}
+		if bytes.HasPrefix(line, readyToken) {
+			break
+		}
+	Cache:
+		e.cache.Write(line)
 	}
-	if !ok {
-		return "", errors.New("error while reading stdMergedOut: EOF")
+	if err != nil {
+		return "", err
 	}
-	res := strings.TrimSpace(e.scanMergedOut.Text())
+	res := strings.TrimSpace(e.cache.String())
 	if strings.HasPrefix(res, "Error: ") {
 		return "", errors.New(strings.ReplaceAll(res, "Error: ", ""))
 	}
-	return e.scanMergedOut.Text(), nil
-}
-
-var readyTokenLen = len(readyToken)
-
-func splitReadyToken(data []byte, atEOF bool) (int, []byte, error) {
-	idx := bytes.Index(data, readyToken)
-	if idx == -1 {
-		if atEOF && len(data) > 0 {
-			return 0, data, fmt.Errorf("no final token found")
-		}
-
-		return 0, nil, nil
-	}
-
-	return idx + readyTokenLen, data[:idx], nil
+	return res, nil
 }
