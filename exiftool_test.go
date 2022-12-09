@@ -6,12 +6,12 @@ import (
 
 func TestExiftool(t *testing.T) {
 	e, err := NewExiftool()
-	defer e.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer e.Close()
 
-	for _, f := range []string{"../testdata/gps.jpg", "../testdata/binary.mp3", "../testdata/binary.mp3", "../testdata/binary.mp3", "../testdata/binary.mp3", "../testdata/binary.mp3", "../testdata/binary.mp3"} {
+	for _, f := range []string{"./exif.go"} {
 		out, err := e.Scan(f)
 		if err != nil {
 			t.Log(err)
@@ -19,5 +19,4 @@ func TestExiftool(t *testing.T) {
 		}
 		t.Log(out)
 	}
-
 }
