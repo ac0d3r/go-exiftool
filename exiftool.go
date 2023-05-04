@@ -3,10 +3,12 @@ package exiftool
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -98,7 +100,7 @@ func (e *Exiftool) Scan(path string) (string, error) {
 	e.mux.Lock()
 	defer e.mux.Unlock()
 
-	for _, v := range []string{"-j", path, "-execute"} {
+	for _, v := range []string{path, "-execute"} {
 		if _, err := fmt.Fprintln(e.stdin, v); err != nil {
 			return "", err
 		}
@@ -121,14 +123,51 @@ func (e *Exiftool) Scan(path string) (string, error) {
 			break
 		}
 	Cache:
-		e.cache.Write(line)
+		e.cache.Write(append(line, '\n'))
 	}
 	if err != nil {
 		return "", err
 	}
-	res := strings.TrimSpace(e.cache.String())
+	// 判断编码
+	data := e.cache.Bytes()
+	if IsGBK(data) {
+		data, err = GbkToUtf8(data)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	res := strings.TrimSpace(string(data))
 	if strings.HasPrefix(res, "Error: ") {
 		return "", errors.New(strings.ReplaceAll(res, "Error: ", ""))
 	}
-	return res, nil
+	return parseOutput(res), nil
+}
+
+// parseOutput parses the output of exiftool and returns a json string
+func parseOutput(res string) string {
+	v := make(map[string]string)
+
+	for _, line := range strings.Split(res, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		kv := strings.SplitN(line, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+
+		k := strings.ReplaceAll(strings.TrimSpace(kv[0]), " ", "")
+		if strings.Index(k, "/") > 0 {
+			k = strings.ReplaceAll(k, "/Time", "")
+		}
+		v[k] = strings.TrimSpace(kv[1])
+	}
+	v["SourceFile"] = path.Join(v["Directory"], v["FileName"])
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+
+	return string(data)
 }

@@ -11,7 +11,7 @@ func TestExiftool(t *testing.T) {
 	}
 	defer e.Close()
 
-	for _, f := range []string{"./exif.go"} {
+	for _, f := range []string{"./testdata/test.xls"} {
 		out, err := e.Scan(f)
 		if err != nil {
 			t.Log(err)
